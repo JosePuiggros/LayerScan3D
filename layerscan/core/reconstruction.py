@@ -20,18 +20,24 @@ class MeshReconstructor:
     """Build a 3D triangle mesh from a stack of 2D binary masks.
 
     The reconstruction workflow:
-        1. Stack all 2D binary masks into a 3D NumPy volume.
-        2. Run Marching Cubes to extract the isosurface.
-        3. Convert the voxel coordinates to physical mm coordinates using
-           the calibration scale for X/Y and the actual z_heights for Z.
-        4. Return a watertight trimesh.Trimesh object.
+        1. Compute a global bounding box across all masks and crop to that
+           region (with a small padding margin). This dramatically reduces
+           the volume size for images where the piece is small relative to
+           the full frame.
+        2. Stack the cropped masks into a 3D NumPy volume.
+        3. Run Marching Cubes at full resolution (step_size=1) to extract
+           the isosurface with maximum detail.
+        4. Convert voxel coordinates back to physical mm, accounting for
+           the crop offset.
+        5. Return a watertight trimesh.Trimesh object.
 
     Args:
         level: The intensity value at which to extract the surface.
-            Since masks are 0 (bg) and 255 (fg), a level of 127 is standard.
+            Since masks are 0 (bg) and 255 (fg), a level of 127.5 is standard.
+        step_size: Marching cubes step size. 1 = full resolution.
     """
 
-    def __init__(self, level: float = 127.5, step_size: int = 4) -> None:
+    def __init__(self, level: float = 127.5, step_size: int = 1) -> None:
         self.level: float = level
         self.step_size: int = step_size
 
@@ -76,13 +82,52 @@ class MeshReconstructor:
             sorted_z[-1],
         )
 
-        # 1. Stack masks into a 3D volume (Z, Y, X)
-        # Pad with empty layers on top and bottom to ensure the mesh closes natively
-        empty_layer = np.zeros_like(sorted_masks[0])
-        volume = np.stack([empty_layer] + sorted_masks + [empty_layer])
+        # 1. Compute global bounding box across all masks
+        global_ymin, global_ymax = sorted_masks[0].shape[0], 0
+        global_xmin, global_xmax = sorted_masks[0].shape[1], 0
+        
+        for m in sorted_masks:
+            ys, xs = np.where(m > 0)
+            if len(xs) > 0:
+                global_xmin = min(global_xmin, int(xs.min()))
+                global_xmax = max(global_xmax, int(xs.max()))
+                global_ymin = min(global_ymin, int(ys.min()))
+                global_ymax = max(global_ymax, int(ys.max()))
+        
+        # Add padding (10 pixels) to ensure marching cubes closes properly
+        pad = 10
+        h, w = sorted_masks[0].shape[:2]
+        global_ymin = max(0, global_ymin - pad)
+        global_ymax = min(h - 1, global_ymax + pad)
+        global_xmin = max(0, global_xmin - pad)
+        global_xmax = min(w - 1, global_xmax + pad)
+        
+        crop_h = global_ymax - global_ymin + 1
+        crop_w = global_xmax - global_xmin + 1
+        
+        logger.info(
+            "Cropping masks to bounding box: X=[%d,%d], Y=[%d,%d] (%dx%d px, "
+            "%.1f%% of original %dx%d).",
+            global_xmin, global_xmax, global_ymin, global_ymax,
+            crop_w, crop_h,
+            100.0 * crop_w * crop_h / (w * h),
+            w, h,
+        )
+
+        # 2. Crop and stack masks into a 3D volume (Z, Y, X)
+        cropped_masks = [m[global_ymin:global_ymax+1, global_xmin:global_xmax+1] for m in sorted_masks]
+        
+        # Pad with empty layers on top and bottom to ensure the mesh closes
+        empty_layer = np.zeros((crop_h, crop_w), dtype=np.uint8)
+        volume = np.stack([empty_layer] + cropped_masks + [empty_layer])
+        
+        logger.info(
+            "Volume shape: %s (%.1f MB)",
+            volume.shape,
+            volume.nbytes / 1e6,
+        )
         
         # Extend z_heights array to match the padded volume
-        # We extrapolate the top and bottom Z by the average layer thickness
         avg_thickness = (sorted_z[-1] - sorted_z[0]) / max(1, len(sorted_z) - 1)
         z_array = np.concatenate([
             [sorted_z[0] - avg_thickness], 
@@ -90,10 +135,8 @@ class MeshReconstructor:
             [sorted_z[-1] + avg_thickness]
         ])
 
-        # 2. Run Marching Cubes
-        # step_size downsamples the volume to save memory. 
-        # step_size=4 reduces resolution by 64x and prevents OOM on large images.
-        logger.debug("Running marching cubes on volume of shape %s with step_size %d", volume.shape, self.step_size)
+        # 3. Run Marching Cubes
+        logger.info("Running marching cubes with step_size=%d...", self.step_size)
         verts_voxel, faces, normals, _ = measure.marching_cubes(
             volume, level=self.level, step_size=self.step_size
         )
@@ -101,23 +144,23 @@ class MeshReconstructor:
         if len(verts_voxel) == 0:
             raise ValueError("Marching cubes could not extract any surface.")
 
-        # 3. Convert voxel coordinates to physical coordinates
-        # verts_voxel is returned as (Z, Y, X)
+        # 4. Convert voxel coordinates to physical coordinates
+        # verts_voxel columns are (Z_idx, Y_idx, X_idx) in the CROPPED volume.
+        # We must add the crop offset back to get original image pixel coords.
         z_idx = verts_voxel[:, 0]
-        y_idx = verts_voxel[:, 1]
-        x_idx = verts_voxel[:, 2]
+        y_idx = verts_voxel[:, 1] + global_ymin  # add crop offset
+        x_idx = verts_voxel[:, 2] + global_xmin  # add crop offset
         
-        # X and Y are straight pixel-to-mm conversions
+        # X and Y are pixel-to-mm conversions
         x_mm = x_idx * scale_mm_per_px
         y_mm = y_idx * scale_mm_per_px
         
         # Z is interpolated based on the floating-point voxel index
-        # np.interp expects strictly increasing x coordinates
         z_mm = np.interp(z_idx, np.arange(len(z_array)), z_array)
         
         vertices = np.column_stack([x_mm, y_mm, z_mm])
 
-        # 4. Create Trimesh
+        # 5. Create Trimesh
         mesh = trimesh.Trimesh(vertices=vertices, faces=faces, vertex_normals=normals, process=True)
         
         # Ensure normals point outward

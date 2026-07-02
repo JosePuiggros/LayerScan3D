@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional, List, Any
 import traceback
 
+import numpy as np
 import trimesh
 
 from layerscan.core.image_loader import load_images, LayerImage
@@ -107,7 +108,17 @@ class ProcessingPipeline:
                 
             # Step 4: Segment Images
             self._report_progress(30.0, "Segmenting images...")
-            masks = segment_batch([img.image for img in result.images], method=SegmentationMethod.OTSU)
+            # The layer images are already binary (0 and 255 only), so we
+            # threshold directly. Using segment_batch with morphological
+            # cleanup would fill in fine internal structures (Gyroid pores).
+            import cv2
+            masks = []
+            for img in result.images:
+                gray = img.image
+                if len(gray.shape) == 3:
+                    gray = cv2.cvtColor(gray, cv2.COLOR_BGR2GRAY)
+                mask = (gray > 127).astype(np.uint8) * 255
+                masks.append(mask)
             
             # Step 5: Extract Contours
             self._report_progress(45.0, "Extracting contours...")
@@ -141,11 +152,25 @@ class ProcessingPipeline:
                 result.reference_mesh = MeshIO.load_mesh(stl_file)
                 
                 self._report_progress(75.0, "Aligning models...")
-                aligner = ModelAligner()
+                
+                # Pre-align: translate reconstructed mesh so its centroid matches the reference
+                src_centroid = result.reconstructed_mesh.centroid
+                tgt_centroid = result.reference_mesh.centroid
+                pre_translation = tgt_centroid - src_centroid
+                pre_transform = np.eye(4)
+                pre_transform[:3, 3] = pre_translation
+                result.reconstructed_mesh.apply_transform(pre_transform)
+                logger.info(
+                    "Pre-alignment translation: [%.3f, %.3f, %.3f]",
+                    pre_translation[0], pre_translation[1], pre_translation[2],
+                )
+                
+                # Run ICP for fine alignment (unconstrained 3D)
+                aligner = ModelAligner(constrain_z=False)
                 result.alignment = aligner.align(source=result.reconstructed_mesh, target=result.reference_mesh)
                 
-                # Apply transform to reconstructed mesh
-                aligner.apply_transform(result.reconstructed_mesh, result.alignment.transformation_matrix)
+                # Apply ICP transform directly to the mesh (in-place)
+                result.reconstructed_mesh.apply_transform(result.alignment.transformation_matrix)
                 
                 self._report_progress(85.0, "Calculating comparisons...")
                 tolerance = p_cfg.get("tolerance_mm", self.app_config.get("default_tolerance_mm", 0.2))
