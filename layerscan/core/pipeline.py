@@ -91,6 +91,21 @@ class ProcessingPipeline:
             
             if not result.images:
                 raise ValueError("No valid images loaded.")
+            
+            # If G-code provides total height, recalculate actual layer height
+            # based on number of images. This handles the case where slicer
+            # exports images at a different interval than the physical layer height.
+            if result.gcode_data and result.gcode_data.total_height > 0 and len(result.images) > 1:
+                actual_layer_h = result.gcode_data.total_height / (len(result.images) - 1)
+                if abs(actual_layer_h - default_layer_h) > 0.001:
+                    logger.info(
+                        "Adjusting layer height from %.4f to %.4f mm "
+                        "(G-code total=%.2f mm / %d images)",
+                        default_layer_h, actual_layer_h,
+                        result.gcode_data.total_height, len(result.images),
+                    )
+                    for i, img in enumerate(result.images):
+                        img.z_height = i * actual_layer_h
 
             # Step 3: Load Calibration
             self._report_progress(20.0, "Applying calibration...")
@@ -152,6 +167,41 @@ class ProcessingPipeline:
                 result.reference_mesh = MeshIO.load_mesh(stl_file)
                 
                 self._report_progress(75.0, "Aligning models...")
+                
+                # Scale reconstructed mesh to match reference dimensions.
+                # The Z height from G-code may include Z-hops/auto-leveling,
+                # and the XY scale from calibration may not be perfectly accurate.
+                recon_ext = result.reconstructed_mesh.extents
+                ref_ext = result.reference_mesh.extents
+                
+                if recon_ext[2] > 0 and ref_ext[2] > 0:
+                    z_scale = ref_ext[2] / recon_ext[2]
+                else:
+                    z_scale = 1.0
+                    
+                # For XY, use the average of X and Y scale factors
+                xy_scales = []
+                for axis in range(2):
+                    if recon_ext[axis] > 0 and ref_ext[axis] > 0:
+                        xy_scales.append(ref_ext[axis] / recon_ext[axis])
+                xy_scale = np.mean(xy_scales) if xy_scales else 1.0
+                
+                if abs(z_scale - 1.0) > 0.01 or abs(xy_scale - 1.0) > 0.01:
+                    logger.info(
+                        "Scaling reconstructed mesh: XY=%.4f, Z=%.4f "
+                        "(recon extents=[%.2f, %.2f, %.2f], ref=[%.2f, %.2f, %.2f])",
+                        xy_scale, z_scale,
+                        *recon_ext, *ref_ext,
+                    )
+                    # Scale around the mesh centroid
+                    center = result.reconstructed_mesh.centroid.copy()
+                    T1 = np.eye(4); T1[:3, 3] = -center
+                    S = np.eye(4)
+                    S[0, 0] = xy_scale
+                    S[1, 1] = xy_scale
+                    S[2, 2] = z_scale
+                    T2 = np.eye(4); T2[:3, 3] = center
+                    result.reconstructed_mesh.apply_transform(T2 @ S @ T1)
                 
                 # Pre-align: translate reconstructed mesh so its centroid matches the reference
                 src_centroid = result.reconstructed_mesh.centroid

@@ -156,20 +156,25 @@ class ModelComparator:
     ) -> np.ndarray:
         """Compute per-vertex distances from reconstructed to reference surface.
 
-        Uses scipy's cKDTree for memory-efficient point-to-point distance 
-        approximation instead of full point-to-surface to avoid OOM on large meshes.
+        Uses trimesh's proximity query to find the closest point on the
+        reference *surface* (not just the nearest vertex), giving accurate
+        point-to-surface distances.
         """
-        from scipy.spatial import cKDTree
-        
         logger.debug(
-            "Computing point-to-point distances for %d vertices against %d reference vertices",
-            len(reconstructed.vertices), len(reference.vertices)
+            "Computing point-to-surface distances for %d vertices against reference (%d faces)",
+            len(reconstructed.vertices), len(reference.faces)
         )
 
-        tree = cKDTree(reference.vertices)
-        distances, _ = tree.query(reconstructed.vertices)
-
-        return np.abs(distances).astype(np.float64)
+        # closest_point returns (closest_points, distances, triangle_id)
+        try:
+            closest_points, distances, _ = reference.nearest.on_surface(reconstructed.vertices)
+            return np.abs(distances).astype(np.float64)
+        except Exception as e:
+            logger.warning("Point-to-surface failed (%s), falling back to vertex-to-vertex", e)
+            from scipy.spatial import cKDTree
+            tree = cKDTree(reference.vertices)
+            distances, _ = tree.query(reconstructed.vertices)
+            return np.abs(distances).astype(np.float64)
 
     @staticmethod
     def _compute_statistics(distances: np.ndarray) -> dict[str, float]:
