@@ -83,9 +83,9 @@ class PipelineWorker(QThread):
         """Execute the pipeline in the background thread."""
         try:
             logger.info("PipelineWorker: starting pipeline execution")
-            result = self._pipeline.run(
-                progress_callback=self._progress_callback,
-            )
+            if hasattr(self._pipeline, 'set_progress_callback'):
+                self._pipeline.set_progress_callback(self._progress_callback)
+            result = self._pipeline.run()
 
             if self._cancelled:
                 logger.info("PipelineWorker: cancelled during execution")

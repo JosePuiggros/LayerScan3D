@@ -12,7 +12,7 @@ from typing import Optional
 
 import numpy as np
 
-from layerscan.core.stl_slicer import SliceContour
+from layerscan.core.contour_extraction import LayerContour
 from layerscan.utils.logger import get_logger
 
 logger = get_logger("core.anomaly_detection")
@@ -105,7 +105,7 @@ class AnomalyDetector:
 
     def detect_all(
         self,
-        contours: list[SliceContour],
+        contours: list[LayerContour],
         planned_z_values: Optional[list[float]] = None,
     ) -> AnomalyReport:
         """Run all anomaly detection checks on a sequence of layer contours.
@@ -163,7 +163,7 @@ class AnomalyDetector:
 
     def _detect_missing_layers(
         self,
-        contours: list[SliceContour],
+        contours: list[LayerContour],
         planned_z_values: Optional[list[float]],
     ) -> list[Anomaly]:
         """Detect missing layers by analysing gaps in Z height sequence.
@@ -222,7 +222,7 @@ class AnomalyDetector:
 
     def _detect_layer_shifts(
         self,
-        contours: list[SliceContour],
+        contours: list[LayerContour],
     ) -> list[Anomaly]:
         """Detect lateral layer shifts by comparing contour centroids.
 
@@ -241,11 +241,11 @@ class AnomalyDetector:
         prev_centroid: Optional[np.ndarray] = None
 
         for i, contour in enumerate(contours):
-            if contour.contour_points.shape[0] < 3:
+            if contour.outer_contour.shape[0] < 3:
                 prev_centroid = None
                 continue
 
-            centroid = np.mean(contour.contour_points, axis=0)
+            centroid = np.mean(contour.outer_contour, axis=0)
 
             if prev_centroid is not None:
                 displacement = float(np.linalg.norm(centroid - prev_centroid))
@@ -276,7 +276,7 @@ class AnomalyDetector:
 
     def _detect_width_variations(
         self,
-        contours: list[SliceContour],
+        contours: list[LayerContour],
     ) -> list[Anomaly]:
         """Detect sudden changes in contour perimeter or area.
 
@@ -298,14 +298,14 @@ class AnomalyDetector:
 
             # Check perimeter variation
             perimeter_anomaly = self._check_relative_change(
-                prev.perimeter, curr.perimeter, "perimeter", i
+                prev.perimeter_mm, curr.perimeter_mm, "perimeter", i
             )
             if perimeter_anomaly:
                 anomalies.append(perimeter_anomaly)
 
             # Check area variation
             area_anomaly = self._check_relative_change(
-                prev.area, curr.area, "area", i
+                prev.area_mm2, curr.area_mm2, "area", i
             )
             if area_anomaly:
                 anomalies.append(area_anomaly)

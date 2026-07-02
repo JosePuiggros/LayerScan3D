@@ -10,9 +10,9 @@ import traceback
 
 import trimesh
 
-from layerscan.core.image_loader import ImageLoader, LayerImage
+from layerscan.core.image_loader import load_images, LayerImage
 from layerscan.core.calibration import CameraCalibrator
-from layerscan.core.segmentation import Segmenter
+from layerscan.core.segmentation import segment_batch, SegmentationMethod
 from layerscan.core.contour_extraction import ContourExtractor, LayerContour
 from layerscan.core.occlusion import OcclusionDetector, OcclusionReport
 from layerscan.core.reconstruction import MeshReconstructor
@@ -80,13 +80,12 @@ class ProcessingPipeline:
             if not img_dir:
                 raise ValueError("Images directory is required.")
                 
-            loader = ImageLoader()
             # If G-code layer height is known, use it, else use default manual
-            default_layer_h = p_cfg.get("layer_height_mm", 0.2)
-            result.images = loader.load_from_directory(
+            default_layer_h = float(p_cfg.get("layer_height_mm", 0.2))
+            result.images = load_images(
                 img_dir, 
                 expected_count=expected_layers if expected_layers > 0 else None,
-                manual_layer_height=default_layer_h
+                layer_height_mm=default_layer_h
             )
             
             if not result.images:
@@ -104,19 +103,18 @@ class ProcessingPipeline:
                 
             # Step 4: Segment Images
             self._report_progress(30.0, "Segmenting images...")
-            segmenter = Segmenter(config=self.app_config)
-            masks = segmenter.segment_batch([img.image for img in result.images])
+            masks = segment_batch([img.image for img in result.images], method=SegmentationMethod.ADAPTIVE)
             
             # Step 5: Extract Contours
             self._report_progress(45.0, "Extracting contours...")
-            extractor = ContourExtractor(config=self.app_config)
+            extractor = ContourExtractor()
             
             for i, mask in enumerate(masks):
                 # Apply z_height from loaded images
                 z_h = result.images[i].z_height
-                contour = extractor.extract_from_mask(mask, scale_mm_per_px=scale_mm_per_px, z_height=z_h)
-                if contour:
-                    result.contours.append(contour)
+                contours_list = extractor.extract_from_mask(mask, scale_override=scale_mm_per_px, z_height=z_h)
+                if contours_list:
+                    result.contours.extend(contours_list)
                     
             if not result.contours:
                 raise ValueError("No contours could be extracted.")
@@ -128,7 +126,7 @@ class ProcessingPipeline:
             
             # Step 7: 3D Reconstruction
             self._report_progress(60.0, "Reconstructing 3D mesh...")
-            reconstructor = MeshReconstructor(config=self.app_config)
+            reconstructor = MeshReconstructor()
             result.reconstructed_mesh = reconstructor.reconstruct(result.contours)
 
             # Step 8: Load Reference STL and Compare
@@ -138,7 +136,7 @@ class ProcessingPipeline:
                 result.reference_mesh = MeshIO.load_mesh(stl_file)
                 
                 self._report_progress(75.0, "Aligning models...")
-                aligner = ModelAligner(config=self.app_config)
+                aligner = ModelAligner()
                 result.alignment = aligner.align(source=result.reconstructed_mesh, target=result.reference_mesh)
                 
                 # Apply transform to reconstructed mesh

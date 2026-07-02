@@ -28,6 +28,7 @@ _LAYER_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"capa[_\-]?(\d+)", re.IGNORECASE),    # capa_001 (Spanish)
     re.compile(r"slice[_\-]?(\d+)", re.IGNORECASE),   # slice_001
     re.compile(r"^(\d+)$"),                            # bare number: "001" (stem only)
+    re.compile(r"(\d+)$"),                             # trailing digits: "Prefix_001"
 ]
 
 
@@ -207,9 +208,9 @@ def load_images(
 
     # Validate count
     if expected_count is not None and len(layer_images) != expected_count:
-        raise ValueError(
-            f"Expected {expected_count} layer images but loaded "
-            f"{len(layer_images)}."
+        logger.warning(
+            f"Expected {expected_count} layer images from G-code but loaded "
+            f"{len(layer_images)}. Proceeding with available images."
         )
 
     return layer_images

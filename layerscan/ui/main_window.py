@@ -101,7 +101,9 @@ class MainWindow(QMainWindow):
         self.lbl_proc_status.setText("Initializing pipeline...")
         self.progress_bar.setValue(0)
         
-        self.worker = PipelineWorker(self.project_config, self.app_config)
+        from layerscan.core.pipeline import ProcessingPipeline
+        pipeline = ProcessingPipeline(self.project_config, self.app_config)
+        self.worker = PipelineWorker(pipeline, self)
         self.worker.progress.connect(self.update_progress)
         self.worker.finished.connect(self.processing_finished)
         self.worker.start()

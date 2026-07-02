@@ -156,23 +156,18 @@ class ModelComparator:
     ) -> np.ndarray:
         """Compute per-vertex distances from reconstructed to reference surface.
 
-        Uses trimesh.proximity.ProximityQuery to find the closest point on
-        the reference mesh surface for each vertex of the reconstructed mesh.
-
-        Args:
-            reconstructed: The reconstructed mesh (source points).
-            reference: The reference mesh (target surface).
-
-        Returns:
-            1D array of distances (mm), one per vertex of the reconstructed mesh.
+        Uses scipy's cKDTree for memory-efficient point-to-point distance 
+        approximation instead of full point-to-surface to avoid OOM on large meshes.
         """
+        from scipy.spatial import cKDTree
+        
         logger.debug(
-            "Computing point-to-surface distances for %d vertices",
-            len(reconstructed.vertices),
+            "Computing point-to-point distances for %d vertices against %d reference vertices",
+            len(reconstructed.vertices), len(reference.vertices)
         )
 
-        prox = trimesh.proximity.ProximityQuery(reference)
-        closest_points, distances, _ = prox.on_surface(reconstructed.vertices)
+        tree = cKDTree(reference.vertices)
+        distances, _ = tree.query(reconstructed.vertices)
 
         return np.abs(distances).astype(np.float64)
 
