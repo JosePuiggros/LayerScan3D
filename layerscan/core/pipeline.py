@@ -165,12 +165,48 @@ class ProcessingPipeline:
                     pre_translation[0], pre_translation[1], pre_translation[2],
                 )
                 
-                # Run ICP for fine alignment (unconstrained 3D)
-                aligner = ModelAligner(constrain_z=False)
-                result.alignment = aligner.align(source=result.reconstructed_mesh, target=result.reference_mesh)
+                # Try multiple initial rotations around Z to find the best one.
+                # The camera orientation relative to the STL is unknown, so we
+                # test every 15° and pick the rotation with the lowest ICP error.
+                best_error = float("inf")
+                best_transform = np.eye(4)
+                best_alignment = None
+                center = result.reconstructed_mesh.centroid.copy()
+                mesh_backup = result.reconstructed_mesh.copy()
                 
-                # Apply ICP transform directly to the mesh (in-place)
-                result.reconstructed_mesh.apply_transform(result.alignment.transformation_matrix)
+                for angle_deg in range(0, 360, 15):
+                    candidate = mesh_backup.copy()
+                    
+                    # Build rotation around centroid
+                    angle_rad = np.radians(angle_deg)
+                    c, s = np.cos(angle_rad), np.sin(angle_rad)
+                    T1 = np.eye(4); T1[:3, 3] = -center
+                    R = np.eye(4); R[0,0] = c; R[0,1] = -s; R[1,0] = s; R[1,1] = c
+                    T2 = np.eye(4); T2[:3, 3] = center
+                    rot_transform = T2 @ R @ T1
+                    candidate.apply_transform(rot_transform)
+                    
+                    aligner = ModelAligner(constrain_z=False, max_iterations=50)
+                    alignment = aligner.align(source=candidate, target=result.reference_mesh)
+                    
+                    if alignment.mean_error < best_error:
+                        best_error = alignment.mean_error
+                        best_transform = alignment.transformation_matrix @ rot_transform
+                        best_alignment = alignment
+                        logger.debug(
+                            "New best rotation: %d° (error=%.4f mm)",
+                            angle_deg, best_error,
+                        )
+                
+                result.alignment = best_alignment
+                logger.info(
+                    "Best alignment found: rotation=%.1f°, error=%.4f mm",
+                    best_alignment.rotation_angle_deg, best_error,
+                )
+                
+                # Apply best combined transform to the original pre-aligned mesh
+                result.reconstructed_mesh = mesh_backup
+                result.reconstructed_mesh.apply_transform(best_transform)
                 
                 self._report_progress(85.0, "Calculating comparisons...")
                 tolerance = p_cfg.get("tolerance_mm", self.app_config.get("default_tolerance_mm", 0.2))
