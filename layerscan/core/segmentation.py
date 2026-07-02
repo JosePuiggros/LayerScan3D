@@ -111,9 +111,8 @@ def _morphological_cleanup(
     # Closing: fill small gaps
     cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, kernel, iterations=1)
 
-    # Fill interior holes (scipy operates on bool arrays)
-    filled = binary_fill_holes(cleaned > 0)
-    cleaned = (filled.astype(np.uint8)) * 255
+    # Removed binary_fill_holes to preserve porous structures like Gyroids
+    # If users need hole filling for solid parts, this should be configurable.
 
     # Remove small connected components
     if min_contour_area > 0:

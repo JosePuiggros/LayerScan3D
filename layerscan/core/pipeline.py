@@ -96,14 +96,18 @@ class ProcessingPipeline:
             # For simplicity in this implementation, we assume calibration scale is applied during contour extraction
             # and images are undistorted here if needed.
             calib_profile_name = p_cfg.get("calibration_profile")
-            scale_mm_per_px = 1.0
+            scale_mm_per_px = float(p_cfg.get("scale_mm_per_px", 1.0))
             if calib_profile_name:
-                # In a real scenario, load the profile and get scale
-                pass 
+                calibrator = CameraCalibrator()
+                try:
+                    calibrator.load_profile(calib_profile_name)
+                    scale_mm_per_px = calibrator.get_scale()
+                except Exception as e:
+                    logger.warning(f"Could not load calibration profile '{calib_profile_name}': {e}")
                 
             # Step 4: Segment Images
             self._report_progress(30.0, "Segmenting images...")
-            masks = segment_batch([img.image for img in result.images], method=SegmentationMethod.ADAPTIVE)
+            masks = segment_batch([img.image for img in result.images], method=SegmentationMethod.OTSU)
             
             # Step 5: Extract Contours
             self._report_progress(45.0, "Extracting contours...")
@@ -127,7 +131,8 @@ class ProcessingPipeline:
             # Step 7: 3D Reconstruction
             self._report_progress(60.0, "Reconstructing 3D mesh...")
             reconstructor = MeshReconstructor()
-            result.reconstructed_mesh = reconstructor.reconstruct(result.contours)
+            z_heights = [img.z_height for img in result.images]
+            result.reconstructed_mesh = reconstructor.reconstruct(masks, z_heights, scale_mm_per_px)
 
             # Step 8: Load Reference STL and Compare
             stl_file = p_cfg.get("stl_file")

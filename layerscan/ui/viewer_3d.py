@@ -83,24 +83,40 @@ class Viewer3D(QWidget):
             
         self.plotter.reset_camera()
         
-    def show_heatmap(self, reconstructed_trimesh, per_vertex_distances, cmap="jet"):
+    def show_heatmap(self, reconstructed_trimesh, per_vertex_distances, reference_trimesh=None, cmap="jet"):
         if self.plotter is None or not reconstructed_trimesh:
             return
             
         self.plotter.clear()
+        self.reconstructed_mesh_actor = None
+        self.reference_mesh_actor = None
+        self.heatmap_actor = None
+        
+        # Add Reference Mesh (hidden by default maybe? or wireframe)
+        if reference_trimesh:
+            faces_ref = np.column_stack((np.full(len(reference_trimesh.faces), 3), reference_trimesh.faces)).flatten()
+            pv_ref = pv.PolyData(reference_trimesh.vertices, faces_ref)
+            self.reference_mesh_actor = self.plotter.add_mesh(pv_ref, color="#888888", style="wireframe", opacity=0.3, name="reference")
+            
         faces = np.column_stack((np.full(len(reconstructed_trimesh.faces), 3), reconstructed_trimesh.faces)).flatten()
         pv_mesh = pv.PolyData(reconstructed_trimesh.vertices, faces)
         
         # Add scalar data
         pv_mesh.point_data["Distance Error (mm)"] = per_vertex_distances
         
-        self.heatmap_actor = self.plotter.add_mesh(
+        # Assign to reconstructed_mesh_actor so the toggle button works
+        self.reconstructed_mesh_actor = self.plotter.add_mesh(
             pv_mesh, 
             scalars="Distance Error (mm)", 
             cmap=cmap, 
             show_scalar_bar=True,
-            name="heatmap"
+            name="reconstructed"
         )
+        
+        # Re-apply toggle states from the buttons
+        self.toggle_reconstructed(self.btn_toggle_recon.isChecked())
+        self.toggle_reference(self.btn_toggle_ref.isChecked())
+        
         self.plotter.reset_camera()
         
     def reset_camera(self):

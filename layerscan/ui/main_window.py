@@ -122,7 +122,11 @@ class MainWindow(QMainWindow):
             # Update Viewer
             self.viewer_3d.load_meshes(result.reconstructed_mesh, result.reference_mesh)
             if result.comparison and result.comparison.per_vertex_distances is not None:
-                self.viewer_3d.show_heatmap(result.reconstructed_mesh, result.comparison.per_vertex_distances)
+                self.viewer_3d.show_heatmap(
+                    result.reconstructed_mesh, 
+                    result.comparison.per_vertex_distances,
+                    reference_trimesh=result.reference_mesh
+                )
                 
             # Update Metrics
             self.metrics_panel.update_metrics(result)

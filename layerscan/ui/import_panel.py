@@ -53,8 +53,20 @@ class ImportPanel(QWidget):
         group_gcode.setLayout(l_gcode)
         self.layout.addWidget(group_gcode)
         
+        # Calibration section
+        group_cal = QGroupBox("4. Camera Calibration")
+        l_cal = QHBoxLayout()
+        l_cal.addWidget(QLabel("Scale (mm/px):"))
+        self.txt_scale = QLineEdit("1.000")
+        self.btn_calibrate = QPushButton("Calibrate from First Image...")
+        self.btn_calibrate.clicked.connect(self.run_calibration)
+        l_cal.addWidget(self.txt_scale)
+        l_cal.addWidget(self.btn_calibrate)
+        group_cal.setLayout(l_cal)
+        self.layout.addWidget(group_cal)
+
         # Settings section
-        group_set = QGroupBox("4. Print Settings")
+        group_set = QGroupBox("5. Print Settings")
         l_set = QHBoxLayout()
         l_set.addWidget(QLabel("Default Layer Height:"))
         self.spin_layer = QDoubleSpinBox()
@@ -91,11 +103,39 @@ class ImportPanel(QWidget):
         if file:
             self.txt_gcode.setText(file)
             
+    def run_calibration(self):
+        folder = self.txt_images.text()
+        if not folder or not Path(folder).is_dir():
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "No Images", "Please select a valid image folder first.")
+            return
+            
+        # Find first image
+        import os
+        supported_exts = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif'}
+        first_img = None
+        for file in sorted(os.listdir(folder)):
+            if Path(file).suffix.lower() in supported_exts:
+                first_img = os.path.join(folder, file)
+                break
+                
+        if not first_img:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "No Images", "No supported images found in the selected folder.")
+            return
+            
+        from layerscan.ui.calibration_tool import ManualCalibrationDialog
+        dialog = ManualCalibrationDialog(first_img, self)
+        if dialog.exec():
+            if dialog.calculated_scale is not None:
+                self.txt_scale.setText(f"{dialog.calculated_scale:.6f}")
+
     def emit_start(self):
         config_data = {
             "images_dir": self.txt_images.text(),
             "stl_file": self.txt_stl.text(),
             "gcode_file": self.txt_gcode.text(),
-            "layer_height_mm": self.spin_layer.value()
+            "layer_height_mm": self.spin_layer.value(),
+            "scale_mm_per_px": float(self.txt_scale.text()) if self.txt_scale.text() else 1.0
         }
         self.start_processing.emit(config_data)
