@@ -79,7 +79,7 @@ class Viewer3D(QWidget):
         if reference_trimesh:
             faces_ref = np.column_stack((np.full(len(reference_trimesh.faces), 3), reference_trimesh.faces)).flatten()
             pv_ref = pv.PolyData(reference_trimesh.vertices, faces_ref)
-            self.reference_mesh_actor = self.plotter.add_mesh(pv_ref, color="#888888", style="wireframe", opacity=0.3, name="reference")
+            self.reference_mesh_actor = self.plotter.add_mesh(pv_ref, color="#888888", opacity=0.3, show_edges=False, name="reference")
             
         self.plotter.reset_camera()
         
@@ -96,7 +96,7 @@ class Viewer3D(QWidget):
         if reference_trimesh:
             faces_ref = np.column_stack((np.full(len(reference_trimesh.faces), 3), reference_trimesh.faces)).flatten()
             pv_ref = pv.PolyData(reference_trimesh.vertices, faces_ref)
-            self.reference_mesh_actor = self.plotter.add_mesh(pv_ref, color="#888888", style="wireframe", opacity=0.3, name="reference")
+            self.reference_mesh_actor = self.plotter.add_mesh(pv_ref, color="#888888", opacity=0.3, show_edges=False, name="reference")
             
         faces = np.column_stack((np.full(len(reconstructed_trimesh.faces), 3), reconstructed_trimesh.faces)).flatten()
         pv_mesh = pv.PolyData(reconstructed_trimesh.vertices, faces)
@@ -104,12 +104,25 @@ class Viewer3D(QWidget):
         # Add scalar data
         pv_mesh.point_data["Distance Error (mm)"] = per_vertex_distances
         
+        # Scalar bar text styling for dark background
+        sbar_args = {
+            "title": "Distance Error (mm)",
+            "title_font_size": 14,
+            "label_font_size": 12,
+            "color": "white",
+            "position_x": 0.05,
+            "position_y": 0.05,
+            "width": 0.4,
+            "height": 0.06,
+        }
+        
         # Assign to reconstructed_mesh_actor so the toggle button works
         self.reconstructed_mesh_actor = self.plotter.add_mesh(
             pv_mesh, 
             scalars="Distance Error (mm)", 
             cmap=cmap, 
             show_scalar_bar=True,
+            scalar_bar_args=sbar_args,
             name="reconstructed"
         )
         
@@ -122,6 +135,8 @@ class Viewer3D(QWidget):
     def reset_camera(self):
         if hasattr(self, 'plotter') and self.plotter:
             self.plotter.reset_camera()
+            self.plotter.view_isometric()
+            self.plotter.render()
             
     def toggle_reconstructed(self, checked):
         if self.reconstructed_mesh_actor and hasattr(self, 'plotter'):
